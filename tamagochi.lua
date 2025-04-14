@@ -3,6 +3,7 @@ local lib    = require("tamalib")
 local ffi    = require("ffi")
 local socket = require("socket")
 local bit    = require("bit")
+local json = require("JSON")
 
 local vstruct = require "vstruct"
 print(vstruct._VERSION)
@@ -19,6 +20,9 @@ Tamagochi.static.ram_map = {
     minute_upper   = 0x13, -- upper digit (x10)
     hour_lower     = 0x14, -- less significant bit
     hour_upper     = 0x15, -- most significant bit (x16)
+
+    -- time_menu      = 0x2B, -- equal 4 if menu time open
+    time_menu      = 0xFF + 0x4F, --  == 3 menu time open  seconde page
 
     hunger         = 0x40, -- hunger / 8 = (food = 4)
     happiness      = 0x41, -- happiness / 4 = (snack = 4)
@@ -60,7 +64,7 @@ function Tamagochi:initialize(tamagochi_name)
         self:setTime()
     else
         print("load start")
-        local file = io.open("saves/"..start.state, "rb") -- r read mode and b binary mode
+        local file = io.open("saves/start.state", "rb") -- r read mode and b binary mode
         if file then
             local save = file:read "*a" -- read all file
             file:close()
@@ -73,6 +77,7 @@ function Tamagochi:initialize(tamagochi_name)
     self.queue = {}
     self.speed_up = false
     self.timer = 0
+    self.timer_frame = 0
 end
 
 function Tamagochi:update(dt)
@@ -101,27 +106,32 @@ function Tamagochi:update(dt)
         -- print(info.stage)
         if not self.speed_up then
             if info.stage > 0 then -- is alive
-                if info.is_sleeping == false then -- is not sleeping
-                    if info.is_sick then
-                        self:heal()
-                    elseif info.shit > 0 then
-                        self:clean()
-                    elseif info.warning and info.hunger > 0 and info.happiness > 0 then -- is a bitch
-                        self:discipline()
-                    elseif info.hunger < 13 then
-                        self:feed()
-                    elseif info.happiness < 13 then
-                        self:snack()
-                    else
-                        self.speed_up = true
-                        lib.lua_tamalib_set_speed(0)
-                    end
+                if info.time_menu == 3 then -- menu time is open
+                    print("Time MENU IS OPEN")
+                    self:press_b()
                 else
-                    if info.is_light_on then
-                        self:turnLightOff()
+                    if info.is_sleeping == false then -- is not sleeping
+                        if info.is_sick then
+                            self:heal()
+                        elseif info.shit > 0 then
+                            self:clean()
+                        elseif info.warning and info.hunger > 0 and info.happiness > 0 then -- is a bitch
+                            self:discipline()
+                        elseif info.hunger < 13 then
+                            self:feed()
+                        elseif info.happiness < 13 then
+                            self:snack()
+                        else
+                            -- self.speed_up = true
+                            -- lib.lua_tamalib_set_speed(0)
+                        end
                     else
-                        self.speed_up = true
-                        lib.lua_tamalib_set_speed(0)
+                        if info.is_light_on then
+                            self:turnLightOff()
+                        else
+                            -- self.speed_up = true
+                            -- lib.lua_tamalib_set_speed(0)
+                        end
                     end
                 end
             end
@@ -132,6 +142,7 @@ function Tamagochi:update(dt)
     lib.lua_tamalib_get_matrix_data_bin(buf)
 
     local data = ffi.string(buf, DATA_SIZE)
+    self.timer_frame = self.timer_frame + dt
     if data then
         local id = vstruct.readvals("u4", data)
         local off_x = (id*32)%320
@@ -146,12 +157,15 @@ function Tamagochi:update(dt)
         self.playsound = vstruct.readvals("u1", data:sub(16*4+1+5)) -- should play sound ?
         self.freq = vstruct.readvals("u4", data:sub(16*4+1+8))      -- sound frequency
         self.warning = bit.band(self.icone_bin, 0x80) == 0x80  -- icone warning is on ?
-        is_update = true
+        if (self.timer_frame > 1) then
+            self.timer_frame = 0
+            is_update = true
+        end
     end
 
     self.timer = self.timer + dt
-    if self.timer > 5 then
-        print("auto save")
+    if self.timer > 30 then
+        -- print("auto save")
         local save = ffi.new("uint8_t[?]", SAVE_SIZE)
         lib.lua_tamalib_state_save(save)
 
@@ -186,7 +200,7 @@ function Tamagochi:feed()
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_B()
-			print("open food menu")
+			-- print("open food menu")
 		end
 	}
 	self.queue[#self.queue + 1] = {
@@ -199,35 +213,35 @@ function Tamagochi:feed()
 		delay = 0.5,
 		exe = function()
 			self:setRegister(0x75, 0x0) -- select food
-			print("select food")
+			-- print("select food")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_B() -- press b to open submenu
-			print("press b")
+			-- print("press b")
 		end
 	}
 	self.queue[#self.queue + 1] = {
-		delay = 6,
+		delay = 4,
 		exe = function()
 			lib.lua_tamalib_set_release_B() -- press b to feed
-			print("release b")
+			-- print("release b")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_C() -- press b to open submenu
-			print("press c")
+			-- print("press c")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_release_C() -- press b to feed
-			print("release c")
+			-- print("release c")
 		end
 	}
 end
@@ -398,7 +412,7 @@ function Tamagochi:turnLightOff()
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_B()
-			print("open light menu")
+			-- print("open light menu")
 		end
 	}
 	self.queue[#self.queue + 1] = {
@@ -411,35 +425,52 @@ function Tamagochi:turnLightOff()
 		delay = 0.5,
 		exe = function()
 			self:setRegister(0x75, 0x1) -- select food
-			print("select off")
+			-- print("select off")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_B() -- press b to open submenu
-			print("press b")
+			-- print("press b")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 6,
 		exe = function()
 			lib.lua_tamalib_set_release_B() -- press b to feed
-			print("release b")
+			-- print("release b")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 0.5,
 		exe = function()
 			lib.lua_tamalib_set_press_C() -- press b to open submenu
-			print("press c")
+			-- print("press c")
 		end
 	}
 	self.queue[#self.queue + 1] = {
 		delay = 1,
 		exe = function()
 			lib.lua_tamalib_set_release_C() -- press b to feed
-			print("release c")
+			-- print("release c")
+		end
+	}
+end
+
+function Tamagochi:press_b()
+	self.queue[#self.queue + 1] = {
+		delay = 0.5,
+		exe = function()
+			lib.lua_tamalib_set_press_B() -- press b to open submenu
+			-- print("press b")
+		end
+	}
+	self.queue[#self.queue + 1] = {
+		delay = 1,
+		exe = function()
+			lib.lua_tamalib_set_release_B() -- press b to feed
+			-- print("release b")
 		end
 	}
 end
@@ -493,6 +524,7 @@ function Tamagochi:getInfo()
     local care = self:readReg(save, map.care)
     local sleep = self:readReg(save, map.sleep)
     local light = self:readReg(save, map.light)
+    local time_menu = self:readReg(save, map.time_menu)
 
     return {
         hour = hour,
@@ -510,7 +542,12 @@ function Tamagochi:getInfo()
         is_sleeping = sleep >= 8,
         is_light_on = light == 0xF,
         is_sick = health > 8,
-        warning = self.warning
+        warning = self.warning,
+        icone = self.icone_bin,
+        playsound = self.playsound,
+        freq = self.freq,
+        name = self.tamagochi_name,
+        time_menu = time_menu
     }
 end 
 
@@ -567,7 +604,12 @@ function Tamagochi:sendInfo(client)
 end
 
 function Tamagochi:sendState(client)
-
+    local info = self:getInfo()
+    info.img = self.img
+    local raw_json_text = json:encode(info)
+    -- print(#raw_json_text)
+    -- local raw_json_text = json:encode_pretty(info)
+    client:send(raw_json_text)
 end
 
 function Tamagochi:setTime()
@@ -585,26 +627,6 @@ function Tamagochi:setTime()
     self:setRegister(0x11, math.floor(second/10))
 end
 
--- -- Connect to Telnet server (default port is 23)
--- local host = "127.0.0.1"  -- replace with your Telnet server IP
--- local port = 23
-
--- local client = assert(socket.tcp())
--- client:settimeout(5)  -- optional: timeout in seconds
-
--- -- Try to connect
--- local ok, err = client:connect(host, port)
--- if not ok then
---     print("Connection failed: " .. tostring(err))
---     return
--- end
-
--- print("Connected to Telnet server.")
-
--- -- Send data (Telnet usually expects carriage return + newline)
--- local message = "Hello from Lua\r\n"
--- client:send(message)
-
 for i, arg in ipairs(arg) do
     print("Argument " .. i .. ": " .. arg)
 end
@@ -612,37 +634,31 @@ end
 tamagochi_name =  arg[1]
 
 if arg[2] then
-    -- Connect to Telnet server (default port is 23)
-    local host = "127.0.0.1"  -- replace with your Telnet server IP
-    local port = 23
-
-    local client = assert(socket.tcp())
-    client:settimeout(5)  -- optional: timeout in seconds
-
-    -- Try to connect
-    local ok, err = client:connect(host, port)
-    if not ok then
-        print("Connection failed: " .. tostring(err))
-        return
-    end
-
-    print("Connected to TCP server.")
+    -- the address and port of the server
+    local address, port = "127.0.0.1", 12345
+    udp = socket.udp()
+    udp:settimeout(0)
+    udp:setpeername(address, port)
 end
 
 
 
 local tama = Tamagochi:new(tamagochi_name)
--- tama:printInfo()
 
-local fps = 70
-local dt = 1/fps
+-- local fps = 10
+-- local dt = 1/fps
 
+-- print("HELLO")
+
+local time = socket.gettime()
 while true do
+    local dt = socket.gettime() - time
     if tama:update(dt) then
-        tama:printInfo()
+        -- tama:printInfo()
         if arg[2] then
-            tama:sendInfo(client)
+            -- tama:sendInfo(client)
+            tama:sendState(udp)
         end
     end
-    socket.sleep(dt)
+    -- socket.sleep(dt)
 end
